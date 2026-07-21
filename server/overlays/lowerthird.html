@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>UETMS · Lower Third Overlay</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="_shared.css">
+<style>
+  .lt { position:fixed; left:80px; bottom:80px; display:flex; align-items:stretch; animation:slide .5s ease both; }
+  .bar { width:8px; background:var(--accent); }
+  .box { background:var(--panel); border:1px solid var(--line); border-left:none; padding:14px 26px 14px 20px; }
+  .main { font-family:'Barlow Condensed'; font-size:40px; font-weight:700; text-transform:uppercase; line-height:1.05; }
+  .sub { font-size:17px; color:var(--dim); margin-top:4px; letter-spacing:.04em; }
+  @keyframes slide { from { opacity:0; transform:translateX(-24px); } to { opacity:1; transform:none; } }
+  @media (prefers-reduced-motion: reduce) { .lt { animation:none; } }
+</style>
+</head>
+<body>
+<div class="lt" id="root"></div>
+<script src="/socket.io/socket.io.js"></script>
+<script src="_shared.js"></script>
+<script>
+const root = document.getElementById('root');
+async function load() {
+  const text = OV.P.get('text');
+  const sub = OV.P.get('sub') || '';
+  if (text) {
+    root.innerHTML = `<div class="bar"></div><div class="box"><div class="main">${text}</div>${sub ? `<div class="sub">${sub}</div>` : ''}</div>`;
+    return;
+  }
+  if (!OV.slug) { root.innerHTML = '<div class="box"><div class="sub">Add ?text=Your+Text or ?t=tournament-slug</div></div>'; return; }
+  try {
+    const live = await OV.get('/live');
+    if (live.state === 'live') {
+      root.innerHTML = `<div class="bar"></div><div class="box"><div class="main">Match ${live.match.matchNumber} · Live</div><div class="sub">${live.match.round?.name || ''} — ${live.match.map?.name || ''}</div></div>`;
+    } else if (live.match) {
+      root.innerHTML = `<div class="bar"></div><div class="box"><div class="main">${live.match.winnerTeam ? live.match.winnerTeam.name + ' wins Match ' + live.match.matchNumber : 'Match ' + live.match.matchNumber + ' finished'}</div><div class="sub">${live.match.round?.name || ''} — ${live.match.map?.name || ''}</div></div>`;
+    } else root.innerHTML = '';
+  } catch (e) { root.innerHTML = ''; }
+}
+load();
+OV.live(load);
+</script>
+</body>
+</html>

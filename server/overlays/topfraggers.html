@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>UETMS · Top Fraggers Overlay</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="_shared.css">
+<style>
+  .wrap { width:1840px; margin:40px; }
+  .cards { display:flex; gap:20px; }
+  .card { flex:1; background:var(--panel); border:1px solid var(--line); border-top:4px solid var(--accent); padding:22px 20px 18px; position:relative; }
+  .card .rk { position:absolute; top:12px; right:14px; font-family:'Barlow Condensed'; font-size:52px; font-weight:700; color:rgba(255,255,255,.10); }
+  .card.first { border-top-color:#fff; background:linear-gradient(180deg, color-mix(in srgb, var(--accent) 22%, var(--panel)), var(--panel)); }
+  .ign { font-family:'Barlow Condensed'; font-size:36px; font-weight:700; text-transform:uppercase; line-height:1; }
+  .tm { display:flex; align-items:center; gap:8px; color:var(--dim); font-size:15px; margin-top:6px; }
+  .tm img { width:20px; height:20px; object-fit:contain; }
+  .kills { font-family:'Barlow Condensed'; font-size:68px; font-weight:700; color:var(--accent); line-height:1; margin-top:16px; }
+  .kills small { font-size:20px; color:var(--dim); font-weight:600; letter-spacing:.1em; }
+  .sub { display:flex; gap:16px; margin-top:10px; font-size:15px; color:var(--dim); }
+  .sub b { color:var(--ink); font-variant-numeric:tabular-nums; }
+</style>
+</head>
+<body>
+<div class="wrap anim" id="root"><div class="waiting">Loading fraggers…</div></div>
+<script src="/socket.io/socket.io.js"></script>
+<script src="_shared.js"></script>
+<script>
+const root = document.getElementById('root');
+async function load() {
+  if (!OV.need(root)) return;
+  try {
+    const limit = OV.P.get('limit') || 5;
+    const data = await OV.get(`/topfraggers?limit=${limit}`);
+    root.innerHTML = `
+      <div class="head">
+        ${data.tournament.logoUrl ? `<img class="logo" src="${data.tournament.logoUrl}" alt="">` : ''}
+        <div><div class="tname disp">${data.tournament.name}</div>
+        <div class="title disp">${OV.P.get('title') || 'Top Fraggers'}</div></div>
+      </div>
+      <div class="cards">${(data.items || []).map((f) => `
+        <div class="card ${f.rank === 1 ? 'first' : ''}">
+          <div class="rk">${String(f.rank).padStart(2, '0')}</div>
+          <div class="ign">${f.player.ign}</div>
+          <div class="tm">${f.player.currentTeam?.logoUrl ? `<img src="${f.player.currentTeam.logoUrl}" alt="">` : ''}${f.player.currentTeam?.name || ''}</div>
+          <div class="kills">${f.kills} <small>ELIMS</small></div>
+          <div class="sub"><span>DMG <b>${f.damage}</b></span><span>AVG <b>${f.avgKills}</b></span><span>M <b>${f.matches}</b></span></div>
+        </div>`).join('')}</div>`;
+  } catch (e) { root.innerHTML = `<div class="waiting">Waiting for data… (${e.message})</div>`; }
+}
+load();
+OV.live(load);
+</script>
+</body>
+</html>

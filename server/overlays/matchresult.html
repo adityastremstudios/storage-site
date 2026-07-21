@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>UETMS · Match Result Overlay</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="_shared.css">
+<style>
+  .wrap { width:1200px; margin:40px auto; }
+  .winner { display:flex; align-items:center; gap:18px; background:linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 30%, transparent)); color:#0B0E14; padding:14px 22px; margin-bottom:2px; }
+  .winner img { height:56px; width:56px; object-fit:contain; }
+  .winner .lbl { font-family:'Barlow Condensed'; font-size:18px; font-weight:700; letter-spacing:.14em; }
+  .winner .nm { font-family:'Barlow Condensed'; font-size:40px; font-weight:700; text-transform:uppercase; line-height:1; }
+  table { width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--line); }
+  th { font-family:'Barlow Condensed'; text-transform:uppercase; font-size:17px; letter-spacing:.08em; color:var(--dim); padding:10px 14px; border-bottom:2px solid var(--accent); text-align:right; }
+  th.l, td.l { text-align:left; }
+  td { padding:8px 14px; font-size:21px; font-weight:600; text-align:right; border-bottom:1px solid var(--line); font-variant-numeric:tabular-nums; }
+  td.rank { font-family:'Barlow Condensed'; color:var(--dim); width:48px; }
+  td.pts { color:var(--accent); font-weight:700; }
+  .team { display:flex; align-items:center; gap:10px; }
+  .team img { width:26px; height:26px; object-fit:contain; }
+</style>
+</head>
+<body>
+<div class="wrap anim" id="root"><div class="waiting">Loading result…</div></div>
+<script src="/socket.io/socket.io.js"></script>
+<script src="_shared.js"></script>
+<script>
+const root = document.getElementById('root');
+async function load() {
+  if (!OV.need(root)) return;
+  try {
+    let matchId = OV.P.get('m');
+    if (!matchId) {
+      const live = await OV.get('/live');
+      matchId = live.match?.id;
+      if (!matchId) { root.innerHTML = '<div class="waiting">No completed match yet</div>'; return; }
+    }
+    const m = await OV.get(`/matches/${matchId}`);
+    const win = m.teamStats[0];
+    root.innerHTML = `
+      <div class="head">
+        <div><div class="tname disp">${m.round?.name || ''} · ${m.map?.name || ''}</div>
+        <div class="title disp">Match ${m.matchNumber} Result</div></div>
+      </div>
+      ${win ? `<div class="winner">${win.team.logoUrl ? `<img src="${win.team.logoUrl}" alt="">` : ''}<div><div class="lbl">WINNER WINNER</div><div class="nm">${win.team.name}</div></div></div>` : ''}
+      <table><thead><tr><th>#</th><th class="l">Team</th><th>Elims</th><th>Place</th><th>Total</th></tr></thead><tbody>
+      ${m.teamStats.slice(0, Number(OV.P.get('limit') || 8)).map((s) => `
+        <tr><td class="rank">${s.placement}</td>
+        <td class="l"><span class="team">${s.team.logoUrl ? `<img src="${s.team.logoUrl}" alt="">` : ''}${s.team.shortName || s.team.name}</span></td>
+        <td>${s.kills}</td><td>${s.placementPoints}</td><td class="pts">${s.totalPoints}</td></tr>`).join('')}
+      </tbody></table>`;
+  } catch (e) { root.innerHTML = `<div class="waiting">Waiting for data… (${e.message})</div>`; }
+}
+load();
+OV.live(load);
+</script>
+</body>
+</html>

@@ -1,0 +1,448 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  TOURNAMENT_MANAGER
+  OBSERVER
+  DATA_ENTRY
+  CASTER
+  READ_ONLY
+}
+
+enum TournamentStatus {
+  DRAFT
+  UPCOMING
+  LIVE
+  COMPLETED
+  ARCHIVED
+}
+
+enum MatchStatus {
+  DRAFT
+  SCHEDULED
+  LIVE
+  COMPLETED
+  PUBLISHED
+  LOCKED
+}
+
+model User {
+  id           Int           @id @default(autoincrement())
+  email        String        @unique
+  username     String        @unique
+  passwordHash String
+  role         Role          @default(READ_ONLY)
+  isActive     Boolean       @default(true)
+  tokenVersion Int           @default(0)
+  lastLoginAt  DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  activityLogs ActivityLog[]
+  auditLogs    AuditLog[]
+  tournaments  Tournament[]
+  media        Media[]
+  notifications Notification[]
+
+  @@map("users")
+}
+
+model ActivityLog {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action    String
+  ip        String?
+  meta      Json?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@map("activity_logs")
+}
+
+model Game {
+  id            Int           @id @default(autoincrement())
+  name          String        @unique
+  slug          String        @unique
+  shortName     String?
+  logoUrl       String?
+  statTemplate  Json?
+  overlayConfig Json?
+  isActive      Boolean       @default(true)
+  createdAt     DateTime      @default(now())
+  tournaments   Tournament[]
+  maps          GameMap[]
+  connectors    ApiConnector[]
+  pointRules    PointRule[]
+
+  @@map("games")
+}
+
+model GameMap {
+  id       Int     @id @default(autoincrement())
+  gameId   Int
+  game     Game    @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  name     String
+  imageUrl String?
+  matches  Match[]
+
+  @@unique([gameId, name])
+  @@map("maps")
+}
+
+model PointRule {
+  id              Int          @id @default(autoincrement())
+  gameId          Int?
+  game            Game?        @relation(fields: [gameId], references: [id], onDelete: SetNull)
+  name            String
+  placementPoints Json
+  killPoint       Float        @default(1)
+  isDefault       Boolean      @default(false)
+  tournaments     Tournament[]
+
+  @@map("point_rules")
+}
+
+model Organization {
+  id      Int     @id @default(autoincrement())
+  name    String  @unique
+  logoUrl String?
+  country String?
+  teams   Team[]
+
+  @@map("organizations")
+}
+
+model Tournament {
+  id             Int              @id @default(autoincrement())
+  name           String
+  slug           String           @unique
+  gameId         Int
+  game           Game             @relation(fields: [gameId], references: [id])
+  logoUrl        String?
+  bannerUrl      String?
+  organizer      String?
+  country        String?
+  timezone       String           @default("Asia/Kolkata")
+  status         TournamentStatus @default(DRAFT)
+  pointRuleId    Int?
+  pointRule      PointRule?       @relation(fields: [pointRuleId], references: [id], onDelete: SetNull)
+  pointsOverride Json?
+  prizePool      String?
+  startDate      DateTime?
+  endDate        DateTime?
+  isArchived     Boolean          @default(false)
+  deletedAt      DateTime?
+  createdById    Int?
+  createdBy      User?            @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  rounds         Round[]
+  matches        Match[]
+  entries        TournamentTeam[]
+  standings      OverallStanding[]
+  sponsors       Sponsor[]
+  broadcastProfiles BroadcastProfile[]
+  overlayOutputs OverlayOutput[]
+
+  @@map("tournaments")
+}
+
+model Round {
+  id           Int        @id @default(autoincrement())
+  tournamentId Int
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  name         String
+  order        Int        @default(0)
+  isLocked     Boolean    @default(false)
+  isPublished  Boolean    @default(false)
+  startDate    DateTime?
+  matches      Match[]
+
+  @@unique([tournamentId, name])
+  @@map("rounds")
+}
+
+model Team {
+  id             Int              @id @default(autoincrement())
+  name           String           @unique
+  slug           String           @unique
+  shortName      String?
+  logoUrl        String?
+  country        String?
+  organizationId Int?
+  organization   Organization?    @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  isActive       Boolean          @default(true)
+  deletedAt      DateTime?
+  createdAt      DateTime         @default(now())
+  memberships    TeamPlayer[]
+  currentPlayers Player[]         @relation("CurrentTeam")
+  teamStats      TeamStat[]
+  playerStats    PlayerStat[]
+  entries        TournamentTeam[]
+  standings      OverallStanding[]
+  wonMatches     Match[]          @relation("MatchWinner")
+
+  @@map("teams")
+}
+
+model TournamentTeam {
+  id           Int        @id @default(autoincrement())
+  tournamentId Int
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  teamId       Int
+  team         Team       @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  seed         Int?
+  groupName    String?
+
+  @@unique([tournamentId, teamId])
+  @@map("tournament_teams")
+}
+
+model Player {
+  id            Int          @id @default(autoincrement())
+  ign           String       @unique
+  realName      String?
+  photoUrl      String?
+  country       String?
+  role          String?
+  currentTeamId Int?
+  currentTeam   Team?        @relation("CurrentTeam", fields: [currentTeamId], references: [id], onDelete: SetNull)
+  deletedAt     DateTime?
+  createdAt     DateTime     @default(now())
+  memberships   TeamPlayer[]
+  stats         PlayerStat[]
+
+  @@map("players")
+}
+
+model TeamPlayer {
+  id       Int       @id @default(autoincrement())
+  teamId   Int
+  team     Team      @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  playerId Int
+  player   Player    @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  joinedAt DateTime  @default(now())
+  leftAt   DateTime?
+  isActive Boolean   @default(true)
+
+  @@index([teamId, isActive])
+  @@index([playerId])
+  @@map("team_players")
+}
+
+model Match {
+  id              Int         @id @default(autoincrement())
+  tournamentId    Int
+  tournament      Tournament  @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  roundId         Int
+  round           Round       @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  mapId           Int?
+  map             GameMap?    @relation(fields: [mapId], references: [id], onDelete: SetNull)
+  matchNumber     Int
+  scheduledAt     DateTime?
+  startedAt       DateTime?
+  endedAt         DateTime?
+  status          MatchStatus @default(DRAFT)
+  winnerTeamId    Int?
+  winnerTeam      Team?       @relation("MatchWinner", fields: [winnerTeamId], references: [id], onDelete: SetNull)
+  externalMatchId String?     @unique
+  rawJson         Json?
+  isLocked        Boolean     @default(false)
+  deletedAt       DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  teamStats       TeamStat[]
+  playerStats     PlayerStat[]
+
+  @@index([tournamentId, roundId])
+  @@map("matches")
+}
+
+model TeamStat {
+  id              Int     @id @default(autoincrement())
+  matchId         Int
+  match           Match   @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  teamId          Int
+  team            Team    @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  placement       Int
+  kills           Int     @default(0)
+  damage          Float   @default(0)
+  placementPoints Float   @default(0)
+  killPoints      Float   @default(0)
+  totalPoints     Float   @default(0)
+  isWWCD          Boolean @default(false)
+
+  @@unique([matchId, teamId])
+  @@map("team_stats")
+}
+
+model PlayerStat {
+  id           Int     @id @default(autoincrement())
+  matchId      Int
+  match        Match   @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  playerId     Int
+  player       Player  @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  teamId       Int?
+  team         Team?   @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  kills        Int     @default(0)
+  damage       Float   @default(0)
+  assists      Int     @default(0)
+  knocks       Int     @default(0)
+  revives      Int     @default(0)
+  headshots    Int     @default(0)
+  survivalTime Float?
+  isMvp        Boolean @default(false)
+  mvpScore     Float   @default(0)
+
+  @@unique([matchId, playerId])
+  @@map("player_stats")
+}
+
+model OverallStanding {
+  id              Int        @id @default(autoincrement())
+  tournamentId    Int
+  tournament      Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  scope           String     @default("overall")
+  teamId          Int
+  team            Team       @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  matchesPlayed   Int        @default(0)
+  totalKills      Int        @default(0)
+  placementPoints Float      @default(0)
+  killPoints      Float      @default(0)
+  totalPoints     Float      @default(0)
+  wwcd            Int        @default(0)
+  avgPlacement    Float      @default(0)
+  lastPlacement   Int?
+  rank            Int        @default(0)
+  updatedAt       DateTime   @updatedAt
+
+  @@unique([tournamentId, scope, teamId])
+  @@map("overall_standings")
+}
+
+model ApiConnector {
+  id         Int       @id @default(autoincrement())
+  gameId     Int?
+  game       Game?     @relation(fields: [gameId], references: [id], onDelete: SetNull)
+  name       String
+  type       String    @default("push")
+  apiKey     String    @unique
+  config     Json?
+  isActive   Boolean   @default(true)
+  imports    Int       @default(0)
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@map("api_connectors")
+}
+
+model OverlayTemplate {
+  id     Int     @id @default(autoincrement())
+  name   String
+  type   String
+  gameId Int?
+  html   String?
+  config Json?
+
+  @@map("overlay_templates")
+}
+
+model OverlayOutput {
+  id           Int        @id @default(autoincrement())
+  tournamentId Int
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  type         String
+  data         Json
+  publishedAt  DateTime   @default(now())
+
+  @@index([tournamentId, type, publishedAt])
+  @@map("overlay_outputs")
+}
+
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  userId    Int?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  entity    String
+  entityId  Int
+  action    String
+  before    Json?
+  after     Json?
+  createdAt DateTime @default(now())
+
+  @@index([entity, entityId])
+  @@map("audit_logs")
+}
+
+model Notification {
+  id        Int       @id @default(autoincrement())
+  userId    Int?
+  user      User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  body      String?
+  type      String    @default("info")
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@map("notifications")
+}
+
+model Media {
+  id           Int      @id @default(autoincrement())
+  url          String
+  key          String?
+  type         String?
+  size         Int?
+  uploadedById Int?
+  uploadedBy   User?    @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime @default(now())
+
+  @@map("media")
+}
+
+model Sponsor {
+  id           Int        @id @default(autoincrement())
+  tournamentId Int
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  name         String
+  logoUrl      String?
+  tier         String?
+  order        Int        @default(0)
+
+  @@map("sponsors")
+}
+
+model BroadcastProfile {
+  id           Int        @id @default(autoincrement())
+  tournamentId Int
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  name         String
+  config       Json?
+  createdAt    DateTime   @default(now())
+
+  @@map("broadcast_profiles")
+}
+
+model Setting {
+  key   String @id
+  value Json
+
+  @@map("settings")
+}
+
+model Backup {
+  id        Int      @id @default(autoincrement())
+  filename  String
+  size      Int?
+  createdAt DateTime @default(now())
+
+  @@map("backups")
+}

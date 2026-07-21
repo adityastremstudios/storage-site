@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>UETMS · Overall Standings Overlay</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="_shared.css">
+<style>
+  .wrap { width:1840px; margin:40px; }
+  .cols { display:flex; gap:24px; }
+  table { flex:1; border-collapse:collapse; background:var(--panel); border:1px solid var(--line); }
+  th { font-family:'Barlow Condensed'; text-transform:uppercase; font-size:19px; letter-spacing:.08em; color:var(--dim); padding:10px 12px; border-bottom:2px solid var(--accent); text-align:right; }
+  th.l, td.l { text-align:left; }
+  td { padding:9px 12px; font-size:22px; font-weight:600; text-align:right; border-bottom:1px solid var(--line); font-variant-numeric:tabular-nums; }
+  td.rank { font-family:'Barlow Condensed'; font-size:24px; width:52px; color:var(--dim); }
+  tr.top1 td { background:linear-gradient(90deg, color-mix(in srgb, var(--accent) 26%, transparent), transparent 70%); }
+  tr.top1 td.rank { color:var(--accent); }
+  .team { display:flex; align-items:center; gap:10px; }
+  .team img { width:30px; height:30px; object-fit:contain; }
+  .tag { font-family:'Barlow Condensed'; font-size:24px; font-weight:700; letter-spacing:.03em; }
+  .full { font-size:15px; color:var(--dim); font-weight:400; }
+  td.pts { color:var(--accent); font-weight:700; font-size:24px; }
+</style>
+</head>
+<body>
+<div class="wrap anim" id="root"><div class="waiting">Loading standings…</div></div>
+<script src="/socket.io/socket.io.js"></script>
+<script src="_shared.js"></script>
+<script>
+const root = document.getElementById('root');
+function table(rows) {
+  return `<table><thead><tr>
+    <th>#</th><th class="l">Team</th><th>M</th><th>WWCD</th><th>Place</th><th>Elims</th><th>Total</th>
+  </tr></thead><tbody>` + rows.map((r) => `
+    <tr class="${r.rank === 1 ? 'top1' : ''}">
+      <td class="rank">${r.rank}</td>
+      <td class="l"><span class="team">${r.team.logoUrl ? `<img src="${r.team.logoUrl}" alt="">` : ''}<span><span class="tag">${r.team.shortName || r.team.name}</span> <span class="full">${r.team.shortName ? r.team.name : ''}</span></span></span></td>
+      <td>${r.matchesPlayed}</td><td>${r.wwcd}</td><td>${r.placementPoints}</td><td>${r.totalKills}</td>
+      <td class="pts">${r.totalPoints}</td>
+    </tr>`).join('') + '</tbody></table>';
+}
+async function load() {
+  if (!OV.need(root)) return;
+  try {
+    const round = OV.P.get('round');
+    const data = await OV.get(`/overall${round ? `?round=${round}` : ''}`);
+    const rows = data.items || [];
+    const half = Math.ceil(rows.length / 2);
+    const cols = rows.length > 10 ? [rows.slice(0, half), rows.slice(half)] : [rows];
+    root.innerHTML = `
+      <div class="head">
+        ${data.tournament.logoUrl ? `<img class="logo" src="${data.tournament.logoUrl}" alt="">` : ''}
+        <div><div class="tname disp">${data.tournament.name}</div>
+        <div class="title disp">${OV.P.get('title') || 'Overall Standings'}</div></div>
+        <div class="chip disp">${round ? 'Round' : 'All Matches'}</div>
+      </div>
+      <div class="cols">${cols.map(table).join('')}</div>`;
+  } catch (e) { root.innerHTML = `<div class="waiting">Waiting for data… (${e.message})</div>`; }
+}
+load();
+OV.live(load);
+</script>
+</body>
+</html>

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>UETMS · Overlay Directory</title>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  body { background:#0B0E14; color:#F4F6FB; font-family:Inter,system-ui,sans-serif; margin:0; padding:48px; }
+  h1 { font-family:'Barlow Condensed'; text-transform:uppercase; font-size:42px; margin:0 0 6px; }
+  p.hint { color:#9AA3B5; margin:0 0 28px; max-width:640px; line-height:1.5; }
+  .t { background:#131824; border:1px solid rgba(255,255,255,.09); border-radius:8px; padding:20px 22px; margin-bottom:16px; max-width:860px; }
+  .t h2 { font-family:'Barlow Condensed'; text-transform:uppercase; margin:0 0 12px; font-size:26px; }
+  .row { display:flex; align-items:center; gap:10px; padding:7px 0; border-top:1px solid rgba(255,255,255,.06); }
+  .row .ty { font-family:'Barlow Condensed'; text-transform:uppercase; width:130px; color:#F0B429; font-weight:700; letter-spacing:.05em; }
+  .row code { flex:1; font-size:13px; color:#9AA3B5; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .row a, .row button { background:#1D2434; border:1px solid rgba(255,255,255,.12); color:#F4F6FB; padding:6px 12px; border-radius:6px; font-size:13px; cursor:pointer; text-decoration:none; }
+  .row a:hover, .row button:hover { border-color:#F0B429; }
+</style>
+</head>
+<body>
+<h1>Overlay Directory</h1>
+<p class="hint">Add any link below as an OBS / vMix Browser Source (1920×1080). Overlays refresh instantly on publish. Optional params: <b>&amp;bg=green</b> (chroma) / <b>&amp;bg=dark</b> (preview), <b>&amp;accent=%23FF5722</b>, <b>&amp;round=ID</b>.</p>
+<div id="list">Loading tournaments…</div>
+<script>
+const TYPES = ['overall', 'topfraggers', 'matchresult', 'lowerthird'];
+fetch('/api/public/tournaments').then((r) => r.json()).then((d) => {
+  const el = document.getElementById('list');
+  if (!d.items?.length) { el.textContent = 'No tournaments yet — create one in the admin panel.'; return; }
+  el.innerHTML = d.items.map((t) => `<div class="t"><h2>${t.name}</h2>` + TYPES.map((ty) => {
+    const url = `${location.origin}/overlay/${ty}.html?t=${t.slug}`;
+    return `<div class="row"><span class="ty">${ty}</span><code>${url}</code><a href="${url}&bg=dark" target="_blank">Preview</a><button data-url="${url}">Copy</button></div>`;
+  }).join('') + '</div>').join('');
+  el.addEventListener('click', (e) => {
+    if (e.target.dataset.url) { navigator.clipboard.writeText(e.target.dataset.url); e.target.textContent = 'Copied'; setTimeout(() => { e.target.textContent = 'Copy'; }, 1200); }
+  });
+});
+</script>
+</body>
+</html>
