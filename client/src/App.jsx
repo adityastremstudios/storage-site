@@ -11,6 +11,7 @@ import Players from './pages/Players.jsx';
 import Games from './pages/Games.jsx';
 import Users from './pages/Users.jsx';
 import Connectors from './pages/Connectors.jsx';
+import Feeds from './pages/Feeds.jsx';
 
 export default function App() {
   const { user, ready } = useAuth();
@@ -27,6 +28,7 @@ export default function App() {
         <Route path="/games" element={<Games />} />
         <Route path="/users" element={<Users />} />
         <Route path="/connectors" element={<Connectors />} />
+        <Route path="/feeds" element={<Feeds />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Layout>

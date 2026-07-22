@@ -126,7 +126,13 @@ r.get('/t/:slug/live', async (req, res, next) => {
   try {
     const data = await cached(req.tournament.slug, 'live', 15, async () => {
       const live = await prisma.match.findFirst({
-        where: { tournamentId: req.tournament.id, deletedAt: null, status: 'LIVE' },
+        // "live" = not started yet in UETMS, or a feed-driven match whose stats are
+        // already counting but which has not been marked finished (endedAt still open).
+        where: {
+          tournamentId: req.tournament.id,
+          deletedAt: null,
+          OR: [{ status: 'LIVE' }, { status: { in: COUNTED_STATUSES }, endedAt: null }],
+        },
         orderBy: { id: 'desc' },
         include: { round: { select: { name: true } }, map: { select: { name: true } } },
       });

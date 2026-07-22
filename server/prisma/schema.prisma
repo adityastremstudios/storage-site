@@ -151,6 +151,7 @@ model Tournament {
   sponsors       Sponsor[]
   broadcastProfiles BroadcastProfile[]
   overlayOutputs OverlayOutput[]
+  feeds          FeedSource[]
 
   @@map("tournaments")
 }
@@ -165,6 +166,7 @@ model Round {
   isPublished  Boolean    @default(false)
   startDate    DateTime?
   matches      Match[]
+  feeds        FeedSource[]
 
   @@unique([tournamentId, name])
   @@map("rounds")
@@ -342,6 +344,57 @@ model ApiConnector {
   createdAt  DateTime  @default(now())
 
   @@map("api_connectors")
+}
+
+// A remote JSON endpoint that UETMS polls on a timer and auto-imports (pull mode).
+model FeedSource {
+  id             Int         @id @default(autoincrement())
+  name           String
+  url            String
+  adapter        String      @default("auto") // auto | tochanparn | uetms
+  method         String      @default("GET")
+  headers        Json?
+  tournamentId   Int
+  tournament     Tournament  @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  roundId        Int?
+  round          Round?      @relation(fields: [roundId], references: [id], onDelete: SetNull)
+  roundName      String?
+  mapName        String?
+  intervalSec    Int         @default(20)
+  isActive       Boolean     @default(false)
+  autoPublish    Boolean     @default(true)
+  importWhen     String      @default("finished") // finished | always
+  killField      String      @default("auto")     // auto | elim | knock | sum
+  minTeams       Int         @default(2)
+  lastHash       String?
+  lastMatchKey   String?
+  lastStatus     String?
+  lastMessage    String?
+  lastRunAt      DateTime?
+  lastImportAt   DateTime?
+  imports        Int         @default(0)
+  errors         Int         @default(0)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  logs           FeedLog[]
+
+  @@map("feed_sources")
+}
+
+model FeedLog {
+  id        Int        @id @default(autoincrement())
+  feedId    Int
+  feed      FeedSource @relation(fields: [feedId], references: [id], onDelete: Cascade)
+  status    String     // imported | skipped | error
+  message   String?
+  matchKey  String?
+  matchId   Int?
+  teams     Int?
+  ms        Int?
+  createdAt DateTime   @default(now())
+
+  @@index([feedId, createdAt])
+  @@map("feed_logs")
 }
 
 model OverlayTemplate {

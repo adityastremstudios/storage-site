@@ -27,6 +27,8 @@ import dashboardRoutes from './routes/dashboard.js';
 import mediaRoutes, { uploadsDir } from './routes/media.js';
 import auditRoutes from './routes/audit.js';
 import connectorRoutes from './routes/connectors.js';
+import feedRoutes from './routes/feeds.js';
+import { startFeedPoller } from './services/feedPoller.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -53,6 +55,7 @@ app.use('/api/rounds', roundRoutes);
 app.use('/api/matches', matchRoutes);
 app.use('/api/import', importRoutes);
 app.use('/api/connectors', connectorRoutes);
+app.use('/api/feeds', feedRoutes);
 app.use('/api/public', publicRoutes);
 app.use('/api/search', searchRoutes);
 app.use('/api/reports', reportRoutes);
@@ -88,4 +91,5 @@ server.listen(config.port, () => {
   console.log(`  Public site : http://localhost:${config.port}/`);
   console.log(`  Admin panel : http://localhost:${config.port}/admin`);
   console.log(`  Overlays    : http://localhost:${config.port}/overlay/`);
+  startFeedPoller();
 });

@@ -21,6 +21,7 @@ const playerSchema = z.object({
 const teamEntrySchema = z.object({
   team: z.union([z.string().min(1), z.number().int()]),
   shortName: z.string().optional(),
+  logoUrl: z.string().optional(),
   placement: z.coerce.number().int().min(1),
   kills: z.coerce.number().int().min(0).optional(),
   damage: z.coerce.number().min(0).optional(),
@@ -36,6 +37,8 @@ export const importSchema = z.object({
   playedAt: z.string().optional(),
   autoPublish: z.boolean().default(true),
   createMissing: z.boolean().default(true),
+  // false = the match is still running (live feeds); stats count but endedAt stays open
+  finished: z.boolean().default(true),
   teams: z.array(teamEntrySchema).min(2),
 });
 
@@ -85,10 +88,23 @@ async function resolveTeam(entry, tournament, createMissing) {
   const found = await prisma.team.findFirst({
     where: { deletedAt: null, OR: [{ slug: name.toLowerCase() }, { name: { equals: name, mode: 'insensitive' } }, { shortName: { equals: name, mode: 'insensitive' } }] },
   });
-  if (found) return found;
+  if (found) {
+    // Backfill logo / tag the first time a feed supplies them.
+    const patch = {};
+    if (entry.logoUrl && !found.logoUrl) patch.logoUrl = entry.logoUrl;
+    if (entry.shortName && !found.shortName) patch.shortName = entry.shortName;
+    if (Object.keys(patch).length) return prisma.team.update({ where: { id: found.id }, data: patch });
+    return found;
+  }
   if (!createMissing) throw httpError(404, `Team "${name}" not found`);
   const slug = await uniqueSlug(prisma.team, name);
-  return prisma.team.create({ data: { name, slug, shortName: entry.shortName || name.slice(0, 4).toUpperCase() } });
+  return prisma.team.create({
+    data: {
+      name, slug,
+      shortName: entry.shortName || name.slice(0, 4).toUpperCase(),
+      logoUrl: entry.logoUrl || null,
+    },
+  });
 }
 
 async function resolvePlayer(p, team, createMissing) {
@@ -113,7 +129,7 @@ async function ensureMap(tournament, mapName) {
 }
 
 // Core: build/replace all stats for a match from a validated teams payload.
-export async function applyStats(match, tournament, teams, { publish = false } = {}) {
+export async function applyStats(match, tournament, teams, { publish = false, finished = true } = {}) {
   assertPlacementsUnique(teams);
   const rule = resolveRule(tournament);
 
@@ -170,7 +186,7 @@ export async function applyStats(match, tournament, teams, { publish = false } =
       where: { id: match.id },
       data: {
         winnerTeamId: winner ? winner.team.id : null,
-        endedAt: match.endedAt || new Date(),
+        endedAt: finished ? (match.endedAt || new Date()) : null,
         status: publish ? 'PUBLISHED' : 'COMPLETED',
       },
     });
@@ -213,7 +229,7 @@ export async function importMatch(rawPayload, connector = null) {
     });
   }
 
-  const result = await applyStats(match, tournament, payload.teams, { publish: payload.autoPublish });
+  const result = await applyStats(match, tournament, payload.teams, { publish: payload.autoPublish, finished: payload.finished });
 
   if (connector) {
     await prisma.apiConnector.update({

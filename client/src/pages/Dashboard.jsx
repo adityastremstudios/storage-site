@@ -2,10 +2,17 @@ import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api.js';
 
+const FEED_STATUS = { imported: 'ok', unchanged: '', waiting: 'warn', skipped: 'warn', locked: 'warn', error: 'danger' };
+
 export default function Dashboard() {
   const [data, setData] = useState(null);
   const [err, setErr] = useState('');
-  useEffect(() => { api.get('/dashboard').then(setData).catch((e) => setErr(e.message)); }, []);
+  useEffect(() => {
+    const load = () => api.get('/dashboard').then(setData).catch((e) => setErr(e.message));
+    load();
+    const t = setInterval(load, 10000); // keeps the feed panel current
+    return () => clearInterval(t);
+  }, []);
   if (err) return <div className="err">{err}</div>;
   if (!data) return <div className="empty">Loading…</div>;
   const c = data.counts;
@@ -26,6 +33,32 @@ export default function Dashboard() {
               </Link>
             ))}
           </div>
+        </div>
+      )}
+      {data.feeds?.length > 0 && (
+        <div className="card">
+          <div className="chead">
+            <h3>Auto feeds</h3>
+            <div className="grow" />
+            <Link className="btn sm" to="/feeds">Manage</Link>
+          </div>
+          <table className="tbl">
+            <thead><tr><th>Feed</th><th>Tournament</th><th>Status</th><th className="num">Imports</th><th>Last import</th></tr></thead>
+            <tbody>
+              {data.feeds.map((f) => (
+                <tr key={f.id}>
+                  <td><b>{f.name}</b><div className="mut small">every {f.intervalSec}s</div></td>
+                  <td>{f.tournament?.name}</td>
+                  <td>
+                    <span className={`badge ${FEED_STATUS[f.lastStatus] ?? ''}`}>{f.lastStatus || 'idle'}</span>
+                    <div className="mut small">{f.lastMessage}</div>
+                  </td>
+                  <td className="num">{f.imports}{f.errors ? <span className="mut small"> / {f.errors} err</span> : null}</td>
+                  <td className="mut small">{f.lastImportAt ? new Date(f.lastImportAt).toLocaleTimeString() : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
       <div className="card">

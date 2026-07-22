@@ -7,7 +7,7 @@ const r = Router();
 
 r.get('/', authenticate, async (req, res, next) => {
   try {
-    const [tournaments, teams, players, matches, users, live] = await Promise.all([
+    const [tournaments, teams, players, matches, users, live, feeds] = await Promise.all([
       prisma.tournament.count({ where: { deletedAt: null } }),
       prisma.team.count({ where: { deletedAt: null } }),
       prisma.player.count({ where: { deletedAt: null } }),
@@ -16,6 +16,15 @@ r.get('/', authenticate, async (req, res, next) => {
       prisma.tournament.findMany({
         where: { deletedAt: null, status: 'LIVE' },
         select: { id: true, name: true, slug: true, logoUrl: true, game: { select: { name: true } } },
+      }),
+      prisma.feedSource.findMany({
+        where: { isActive: true },
+        orderBy: { lastRunAt: 'desc' },
+        select: {
+          id: true, name: true, url: true, intervalSec: true, imports: true, errors: true,
+          lastStatus: true, lastMessage: true, lastRunAt: true, lastImportAt: true,
+          tournament: { select: { name: true, slug: true } },
+        },
       }),
     ]);
     const recentMatches = await prisma.match.findMany({
@@ -26,7 +35,7 @@ r.get('/', authenticate, async (req, res, next) => {
         winnerTeam: { select: { name: true, shortName: true, logoUrl: true } },
       },
     });
-    res.json({ counts: { tournaments, teams, players, matches, users }, live, recentMatches, cache: cacheStatus() });
+    res.json({ counts: { tournaments, teams, players, matches, users }, live, feeds, recentMatches, cache: cacheStatus() });
   } catch (e) { next(e); }
 });
 

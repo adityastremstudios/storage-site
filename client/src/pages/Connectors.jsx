@@ -30,7 +30,7 @@ export default function Connectors() {
   return (
     <>
       <div className="row" style={{ marginBottom: 14 }}>
-        <span className="mut small">Connectors are API keys for game servers / trackers to push finished-match JSON. One POST creates the match, stats, standings and refreshes every overlay.</span>
+        <span className="mut small">Connectors are API keys for game servers / trackers to <b>push</b> finished-match JSON. One POST creates the match, stats, standings and refreshes every overlay. If your site only exposes a URL, use <b>Auto Feeds</b> instead — UETMS will <b>pull</b> it on a timer.</span>
         <div className="grow" />
         <button className="btn primary" onClick={() => setCreate({ name: '', gameId: '' })}>New connector</button>
       </div>

@@ -9,13 +9,14 @@ const NAV = [
   { to: '/players', label: 'Players' },
   { sec: 'Setup' },
   { to: '/games', label: 'Games & Rules' },
+  { to: '/feeds', label: 'Auto Feeds' },
   { to: '/connectors', label: 'API Connectors', role: 'ADMIN' },
   { to: '/users', label: 'Users', role: 'ADMIN' },
 ];
 
 const TITLES = {
   '/': 'Dashboard', '/tournaments': 'Tournaments', '/teams': 'Teams', '/players': 'Players',
-  '/games': 'Games & Rules', '/connectors': 'API Connectors', '/users': 'Users',
+  '/games': 'Games & Rules', '/feeds': 'Auto Feeds', '/connectors': 'API Connectors', '/users': 'Users',
 };
 
 export default function Layout({ children }) {
