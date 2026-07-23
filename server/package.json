@@ -10,7 +10,9 @@
     "db:migrate": "prisma migrate dev",
     "db:seed": "node prisma/seed.js",
     "db:studio": "prisma studio",
-    "test": "node --test tests/*.test.mjs"
+    "test": "node --test tests/adapters.test.mjs test/engine.test.js",
+    "db:seed:v2": "node prisma/seed-v2.mjs",
+    "migrate:apikeys": "node scripts/migrate-apikeys.mjs"
   },
   "prisma": {
     "seed": "node prisma/seed.js"

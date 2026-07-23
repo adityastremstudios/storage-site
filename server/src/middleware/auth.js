@@ -1,6 +1,8 @@
+import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import { config } from '../config.js';
 import { prisma } from '../lib/prisma.js';
+import { httpError } from './error.js';
 
 export const ROLE_LEVEL = {
   READ_ONLY: 0, CASTER: 1, OBSERVER: 1, DATA_ENTRY: 2,
@@ -47,14 +49,39 @@ export function minRole(role) {
   };
 }
 
-// API-key auth for machine-to-machine imports (game APIs / trackers)
+// ---- API keys -------------------------------------------------------------
+// Keys used to be stored and returned in plaintext, so any signed-in account
+// (down to CASTER) could read every key from GET /api/connectors and push
+// forged match data. Keys are now hashed; only the prefix is ever shown again.
+
+export function generateApiKey() {
+  const secret = `uet_${crypto.randomBytes(24).toString('hex')}`;
+  return { secret, hash: hashApiKey(secret), prefix: secret.slice(0, 12) };
+}
+
+export function hashApiKey(secret) {
+  return crypto.createHash('sha256').update(String(secret)).digest('hex');
+}
+
 export async function apiKeyAuth(req, res, next) {
   try {
     const key = req.headers['x-api-key'];
     if (!key) return res.status(401).json({ error: 'Missing x-api-key header' });
-    const connector = await prisma.apiConnector.findUnique({ where: { apiKey: String(key) } });
+    const connector = await prisma.apiConnector.findUnique({ where: { apiKeyHash: hashApiKey(key) } });
     if (!connector || !connector.isActive) return res.status(401).json({ error: 'Invalid API key' });
     req.connector = connector;
     next();
   } catch (e) { next(e); }
+}
+
+// A connector with a non-empty tournamentIds list may only write to those
+// tournaments. Empty list = unrestricted (previous behaviour, so existing
+// connectors keep working after the migration).
+export function assertConnectorScope(connector, tournamentId) {
+  if (!connector) return;
+  const allowed = connector.tournamentIds || [];
+  if (!allowed.length) return;
+  if (!allowed.includes(Number(tournamentId))) {
+    throw httpError(403, 'This API key is not allowed to import into that tournament');
+  }
 }

@@ -7,6 +7,7 @@ const NAV = [
   { to: '/tournaments', label: 'Tournaments' },
   { to: '/teams', label: 'Teams' },
   { to: '/players', label: 'Players' },
+  { to: '/stats', label: 'Statistics' },
   { sec: 'Setup' },
   { to: '/games', label: 'Games & Rules' },
   { to: '/feeds', label: 'Auto Feeds' },
@@ -16,7 +17,7 @@ const NAV = [
 
 const TITLES = {
   '/': 'Dashboard', '/tournaments': 'Tournaments', '/teams': 'Teams', '/players': 'Players',
-  '/games': 'Games & Rules', '/feeds': 'Auto Feeds', '/connectors': 'API Connectors', '/users': 'Users',
+  '/stats': 'Statistics Center', '/games': 'Games & Rules', '/feeds': 'Auto Feeds', '/connectors': 'API Connectors', '/users': 'Users',
 };
 
 export default function Layout({ children }) {

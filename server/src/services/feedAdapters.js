@@ -1,9 +1,25 @@
 // Adapters turn a third-party live-scoreboard JSON into the UETMS import payload.
 // Add a new adapter here and it instantly becomes selectable on a feed source.
+//
+// Fixes over the original:
+//   - player and team survivalTime are now emitted (both were silently dropped)
+//   - stats the feed does not carry are left undefined, not forced to 0, so the
+//     import records them as "no data" instead of a fake zero
+//   - epoch-seconds timestamps no longer resolve to 1970
 
 function num(v, d = 0) {
   const n = Number(v);
   return Number.isFinite(n) ? n : d;
+}
+
+// Returns undefined when the field is genuinely absent, so `provided` stays honest.
+function opt(...values) {
+  for (const v of values) {
+    if (v === undefined || v === null || v === '') continue;
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return undefined;
 }
 
 // "28:14" / "1:05:09" -> seconds
@@ -13,11 +29,20 @@ function hmsToSeconds(v) {
   return parts.reduce((acc, p) => acc * 60 + p, 0);
 }
 
+// Feeds send epoch in seconds or milliseconds depending on the vendor. Anything
+// below ~year 2286 in ms terms is a seconds value.
+export function toIsoTimestamp(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const ms = n < 1e11 ? n * 1000 : n;
+  const d = new Date(ms);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
 /**
  * Decide which per-player counter actually holds kills.
- * Some scoreboard apps increment `knockCount` for every frag and never touch `elimCount`
- * (that is exactly what tochanparn.space does), others do the opposite.
- * We compare each column against the team's own totalKills and pick the one that matches.
+ * Some scoreboard apps increment `knockCount` for every frag and never touch
+ * `elimCount` (tochanparn.space does exactly this), others do the opposite.
  */
 function resolveKillField(teams, mode = 'auto') {
   if (mode && mode !== 'auto') return mode;
@@ -46,9 +71,9 @@ function derivePlacements(rows) {
     const ar = Number(a.rank); const br = Number(b.rank);
     const aHas = Number.isFinite(ar) && ar > 0;
     const bHas = Number.isFinite(br) && br > 0;
-    if (aHas && bHas) return ar - br;            // feed already gives a real rank
+    if (aHas && bHas) return ar - br;
     if (aHas !== bHas) return aHas ? -1 : 1;
-    if (a.isDead !== b.isDead) return a.isDead ? 1 : -1;  // alive first
+    if (a.isDead !== b.isDead) return a.isDead ? 1 : -1;
     if (b.survival !== a.survival) return b.survival - a.survival;
     if (b.elimTime !== a.elimTime) return b.elimTime - a.elimTime;
     if (b.kills !== a.kills) return b.kills - a.kills;
@@ -62,7 +87,7 @@ function derivePlacements(rows) {
  * tochanparn.space / Aditya Stream Studios style scoreboard:
  * { success, matchId, timestamp, data:[ { name, tag, slot, logo, score, totalKills,
  *   rank, isDead, eliminationTime, survivalSeconds, survivalTime,
- *   players:[ { name, knockCount, elimCount, knock, elim } ] } ] }
+ *   players:[ { name, knockCount, elimCount } ] } ] }
  */
 function tochanparn(raw, opts = {}) {
   const list = Array.isArray(raw?.data) ? raw.data
@@ -74,7 +99,7 @@ function tochanparn(raw, opts = {}) {
 
   const rows = list.map((t) => {
     const players = Array.isArray(t.players) ? t.players : [];
-    const survival = num(t.survivalSeconds, hmsToSeconds(t.survivalTime) ?? 0);
+    const survival = opt(t.survivalSeconds, hmsToSeconds(t.survivalTime));
     return {
       name: String(t.name ?? t.teamName ?? '').trim(),
       tag: t.tag ? String(t.tag).trim() : undefined,
@@ -84,20 +109,28 @@ function tochanparn(raw, opts = {}) {
       rank: t.rank,
       isDead: Boolean(t.isDead),
       elimTime: num(t.eliminationTime),
-      survival,
+      survival: survival ?? 0,
+      survivalTime: survival,
       players: players
         .map((p) => {
-          const elim = num(p.elimCount ?? p.elims ?? p.kills);
-          const knock = num(p.knockCount ?? p.knocks);
-          const kills = killField === 'elim' ? elim : killField === 'sum' ? elim + knock : knock;
+          const elim = opt(p.elimCount, p.elims, p.kills);
+          const knock = opt(p.knockCount, p.knocks);
+          const kills = killField === 'elim' ? (elim ?? 0)
+            : killField === 'sum' ? ((elim ?? 0) + (knock ?? 0))
+              : (knock ?? 0);
           return {
             ign: String(p.name ?? p.ign ?? '').trim(),
             kills,
-            knocks: killField === 'elim' ? knock : 0,
-            damage: num(p.damage ?? p.totalDamage),
-            assists: num(p.assists),
-            revives: num(p.revives),
-            headshots: num(p.headshots),
+            // When the feed uses knockCount as its frag counter there is no
+            // separate down count, so knocks stays undefined ("no data")
+            // instead of being written as a misleading 0.
+            knocks: killField === 'elim' ? knock : undefined,
+            damage: opt(p.damage, p.totalDamage),
+            assists: opt(p.assists),
+            revives: opt(p.revives),
+            headshots: opt(p.headshots, p.headShots),
+            survivalTime: opt(p.survivalSeconds, p.survivalTime && hmsToSeconds(p.survivalTime)),
+            deaths: opt(p.deaths),
           };
         })
         .filter((p) => p.ign),
@@ -108,11 +141,16 @@ function tochanparn(raw, opts = {}) {
   derivePlacements(rows);
 
   const alive = rows.filter((t) => !t.isDead).length;
-  const finished = rows.length > 1 && alive <= 1;
+  const hasDeadFlag = list.some((t) => t.isDead !== undefined);
+  // Without an isDead flag we can never conclude "finished", which would stall
+  // a finished-mode feed forever. Fall back to the rank column.
+  const finished = hasDeadFlag
+    ? rows.length > 1 && alive <= 1
+    : rows.every((t) => Number.isFinite(Number(t.rank)) && Number(t.rank) > 0);
 
   return {
     externalMatchId: raw?.matchId ? String(raw.matchId) : null,
-    playedAt: raw?.timestamp ? new Date(num(raw.timestamp)).toISOString() : null,
+    playedAt: toIsoTimestamp(raw?.timestamp),
     finished,
     aliveTeams: alive,
     killField,
@@ -124,7 +162,7 @@ function tochanparn(raw, opts = {}) {
         logoUrl: t.logo,
         placement: t.placement,
         kills: t.kills,
-        survivalTime: t.survival || undefined,
+        survivalTime: t.survivalTime,
         players: t.players,
       })),
   };

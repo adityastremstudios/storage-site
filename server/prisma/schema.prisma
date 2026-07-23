@@ -34,6 +34,26 @@ enum MatchStatus {
   LOCKED
 }
 
+// NEW — discriminates scoring/stat strategy per game. "br" keeps every existing
+// code path untouched; "h2h" is the hook for Valorant/CS2 later.
+enum GameFormat {
+  BR
+  H2H
+}
+
+enum StatSource {
+  IMPORT
+  MANUAL
+  DERIVED
+}
+
+enum RecalcStatus {
+  QUEUED
+  RUNNING
+  DONE
+  FAILED
+}
+
 model User {
   id           Int           @id @default(autoincrement())
   email        String        @unique
@@ -50,6 +70,9 @@ model User {
   tournaments  Tournament[]
   media        Media[]
   notifications Notification[]
+  matchVersions MatchVersion[]
+  penalties     Penalty[]
+  recalcJobs    RecalcJob[]
 
   @@map("users")
 }
@@ -77,12 +100,39 @@ model Game {
   overlayConfig Json?
   isActive      Boolean       @default(true)
   createdAt     DateTime      @default(now())
+  // NEW
+  format        GameFormat    @default(BR)
   tournaments   Tournament[]
   maps          GameMap[]
   connectors    ApiConnector[]
   pointRules    PointRule[]
+  statDefs      StatDefinition[]
+  achievements  AchievementDef[]
 
   @@map("games")
+}
+
+// NEW — the multi-game hook. Declares which stats a game has, how they
+// aggregate and how they display. BR rows are seeded to match today's columns,
+// so nothing changes now; Valorant/CS2 plug in by adding rows, not code.
+model StatDefinition {
+  id          Int     @id @default(autoincrement())
+  gameId      Int
+  game        Game    @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  key         String
+  label       String
+  scope       String  @default("player") // player | team
+  unit        String?
+  aggregation String  @default("sum")    // sum | avg | max | min | last
+  category    String?
+  isDerived   Boolean @default(false)
+  formula     String?
+  decimals    Int     @default(0)
+  order       Int     @default(0)
+  isVisible   Boolean @default(true)
+
+  @@unique([gameId, scope, key])
+  @@map("stat_definitions")
 }
 
 model GameMap {
@@ -105,6 +155,8 @@ model PointRule {
   placementPoints Json
   killPoint       Float        @default(1)
   isDefault       Boolean      @default(false)
+  // NEW — ordered tiebreaker chain, e.g. ["points","wwcd","placementPoints","kills","lastPlacement"]
+  tiebreakers     Json?
   tournaments     Tournament[]
 
   @@map("point_rules")
@@ -152,6 +204,12 @@ model Tournament {
   broadcastProfiles BroadcastProfile[]
   overlayOutputs OverlayOutput[]
   feeds          FeedSource[]
+  penalties      Penalty[]
+  records        RecordEntry[]
+  playerAggregates PlayerAggregate[]
+  teamAggregates   TeamAggregate[]
+  playerAchievements PlayerAchievement[]
+  recalcJobs     RecalcJob[]
 
   @@map("tournaments")
 }
@@ -165,6 +223,9 @@ model Round {
   isLocked     Boolean    @default(false)
   isPublished  Boolean    @default(false)
   startDate    DateTime?
+  // NEW — stage grouping (Qualifier / Group Stage / Semis / Finals)
+  stage        String?
+  groupName    String?
   matches      Match[]
   feeds        FeedSource[]
 
@@ -184,6 +245,8 @@ model Team {
   isActive       Boolean          @default(true)
   deletedAt      DateTime?
   createdAt      DateTime         @default(now())
+  // NEW
+  coach          String?
   memberships    TeamPlayer[]
   currentPlayers Player[]         @relation("CurrentTeam")
   teamStats      TeamStat[]
@@ -191,6 +254,9 @@ model Team {
   entries        TournamentTeam[]
   standings      OverallStanding[]
   wonMatches     Match[]          @relation("MatchWinner")
+  penalties      Penalty[]
+  aggregates     TeamAggregate[]
+  records        RecordEntry[]
 
   @@map("teams")
 }
@@ -203,6 +269,8 @@ model TournamentTeam {
   team         Team       @relation(fields: [teamId], references: [id], onDelete: Cascade)
   seed         Int?
   groupName    String?
+  // NEW
+  slotNumber   Int?
 
   @@unique([tournamentId, teamId])
   @@map("tournament_teams")
@@ -210,7 +278,10 @@ model TournamentTeam {
 
 model Player {
   id            Int          @id @default(autoincrement())
-  ign           String       @unique
+  // CHANGED: global @unique removed. Two real people can share an IGN; the old
+  // constraint silently merged them into one player and corrupted their stats.
+  // Identity now resolves by externalId -> team roster -> unambiguous IGN.
+  ign           String
   realName      String?
   photoUrl      String?
   country       String?
@@ -219,9 +290,16 @@ model Player {
   currentTeam   Team?        @relation("CurrentTeam", fields: [currentTeamId], references: [id], onDelete: SetNull)
   deletedAt     DateTime?
   createdAt     DateTime     @default(now())
+  // NEW — stable identity when the game API supplies a UID, plus known aliases
+  externalId    String?      @unique
+  aliases       String[]     @default([])
   memberships   TeamPlayer[]
   stats         PlayerStat[]
+  aggregates    PlayerAggregate[]
+  achievements  PlayerAchievement[]
+  records       RecordEntry[]
 
+  @@index([ign])
   @@map("players")
 }
 
@@ -234,6 +312,8 @@ model TeamPlayer {
   joinedAt DateTime  @default(now())
   leftAt   DateTime?
   isActive Boolean   @default(true)
+  // NEW
+  isSubstitute Boolean @default(false)
 
   @@index([teamId, isActive])
   @@index([playerId])
@@ -255,17 +335,76 @@ model Match {
   status          MatchStatus @default(DRAFT)
   winnerTeamId    Int?
   winnerTeam      Team?       @relation("MatchWinner", fields: [winnerTeamId], references: [id], onDelete: SetNull)
-  externalMatchId String?     @unique
+  // CHANGED: was globally @unique, which let one tournament overwrite another
+  // tournament's match when both feeds used the same matchId. Now scoped below.
+  externalMatchId String?
   rawJson         Json?
   isLocked        Boolean     @default(false)
   deletedAt       DateTime?
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
+  // NEW
+  notes           String?
+  tags            String[]    @default([])
+  manualLock      Boolean     @default(false)
+  archivedAt      DateTime?
+  publishedAt     DateTime?
+  statusBefore    MatchStatus?
+  importCount     Int         @default(0)
+  lastImportAt    DateTime?
+  currentVersion  Int         @default(0)
+  clonedFromId    Int?
   teamStats       TeamStat[]
   playerStats     PlayerStat[]
+  versions        MatchVersion[]
+  penalties       Penalty[]
+  records         RecordEntry[]
+  playerAchievements PlayerAchievement[]
 
+  @@unique([tournamentId, externalMatchId])
   @@index([tournamentId, roundId])
+  @@index([roundId, matchNumber])
   @@map("matches")
+}
+
+// NEW — every import/edit snapshots here. Powers Restore, Compare and Import History.
+model MatchVersion {
+  id           Int        @id @default(autoincrement())
+  matchId      Int
+  match        Match      @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  version      Int
+  hash         String
+  source       String     @default("import") // import | feed | manual | recalc
+  rawPayload   Json?
+  mappedTeams  Json?
+  statsBefore  Json?
+  note         String?
+  actorId      Int?
+  actor        User?      @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  createdAt    DateTime   @default(now())
+
+  @@unique([matchId, version])
+  @@index([matchId, createdAt])
+  @@map("match_versions")
+}
+
+// NEW — point deductions (teamkill, late, DC, cheating). Applied at recalc.
+model Penalty {
+  id           Int        @id @default(autoincrement())
+  tournamentId Int
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  matchId      Int?
+  match        Match?     @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  teamId       Int
+  team         Team       @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  points       Float
+  reason       String
+  createdById  Int?
+  createdBy    User?      @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt    DateTime   @default(now())
+
+  @@index([tournamentId, teamId])
+  @@map("penalties")
 }
 
 model TeamStat {
@@ -281,8 +420,21 @@ model TeamStat {
   killPoints      Float   @default(0)
   totalPoints     Float   @default(0)
   isWWCD          Boolean @default(false)
+  // NEW — manual override support (AUTO FIRST / MANUAL ALWAYS)
+  source          StatSource @default(IMPORT)
+  overrides       Json?
+  // NEW — which stat keys the source actually supplied. Keys absent from this
+  // list are treated as "no data" (shown as —, excluded from averages/records)
+  // instead of a real zero.
+  provided        String[]   @default([])
+  // NEW — optional stats, null when the source does not supply them
+  survivalTime    Float?
+  damageTaken     Float?
+  penaltyPoints   Float      @default(0)
+  adjustedPoints  Float?
 
   @@unique([matchId, teamId])
+  @@index([teamId])
   @@map("team_stats")
 }
 
@@ -303,8 +455,26 @@ model PlayerStat {
   survivalTime Float?
   isMvp        Boolean @default(false)
   mvpScore     Float   @default(0)
+  // NEW — manual override support
+  source       StatSource @default(IMPORT)
+  overrides    Json?
+  provided     String[]   @default([])
+  // NEW — extended stats, all nullable so "not supplied" stays distinct from 0
+  deaths       Int?
+  knockedDown  Int?
+  longestKill  Float?
+  distance     Float?
+  heals        Int?
+  boosts       Int?
+  selfDamage   Float?
+  teamDamage   Float?
+  firstBlood   Boolean @default(false)
+  clutches     Int?
+  rating       Float?
 
   @@unique([matchId, playerId])
+  @@index([playerId])
+  @@index([teamId])
   @@map("player_stats")
 }
 
@@ -325,9 +495,154 @@ model OverallStanding {
   lastPlacement   Int?
   rank            Int        @default(0)
   updatedAt       DateTime   @updatedAt
+  // NEW
+  penaltyPoints   Float      @default(0)
+  tiebreakReason  String?
 
   @@unique([tournamentId, scope, teamId])
   @@map("overall_standings")
+}
+
+// NEW — materialised player stats. Rebuilt by the recalculation engine so
+// profile/comparison pages never scan every match row.
+model PlayerAggregate {
+  id            Int        @id @default(autoincrement())
+  scope         String     @default("career") // career | tournament:<id> | round:<id> | map:<name>
+  playerId      Int
+  player        Player     @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  tournamentId  Int?
+  tournament    Tournament? @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  teamId        Int?
+  matches       Int        @default(0)
+  kills         Int        @default(0)
+  damage        Float      @default(0)
+  assists       Int        @default(0)
+  knocks        Int        @default(0)
+  revives       Int        @default(0)
+  headshots     Int        @default(0)
+  deaths        Int?
+  survivalTime  Float?
+  mvpCount      Int        @default(0)
+  wwcdCount     Int        @default(0)
+  avgKills      Float      @default(0)
+  avgDamage     Float?
+  avgPlacement  Float      @default(0)
+  avgSurvival   Float?
+  bestMatchId   Int?
+  worstMatchId  Int?
+  rating        Float?
+  provided      String[]   @default([])
+  stale         Boolean    @default(true)
+  updatedAt     DateTime   @updatedAt
+
+  @@unique([scope, playerId])
+  @@index([tournamentId])
+  @@map("player_aggregates")
+}
+
+// NEW — materialised team stats, same contract as PlayerAggregate.
+model TeamAggregate {
+  id            Int        @id @default(autoincrement())
+  scope         String     @default("career")
+  teamId        Int
+  team          Team       @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  tournamentId  Int?
+  tournament    Tournament? @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  matches       Int        @default(0)
+  points        Float      @default(0)
+  kills         Int        @default(0)
+  damage        Float      @default(0)
+  wwcd          Int        @default(0)
+  avgPlacement  Float      @default(0)
+  avgKills      Float      @default(0)
+  avgDamage     Float?
+  avgSurvival   Float?
+  bestMatchId   Int?
+  worstMatchId  Int?
+  provided      String[]   @default([])
+  stale         Boolean    @default(true)
+  updatedAt     DateTime   @updatedAt
+
+  @@unique([scope, teamId])
+  @@index([tournamentId])
+  @@map("team_aggregates")
+}
+
+// NEW — tournament + all-time records (highest kills, longest survival, ...).
+model RecordEntry {
+  id           Int         @id @default(autoincrement())
+  scope        String      @default("alltime") // alltime | tournament:<id>
+  tournamentId Int?
+  tournament   Tournament? @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  key          String
+  label        String
+  value        Float
+  displayValue String?
+  playerId     Int?
+  player       Player?     @relation(fields: [playerId], references: [id], onDelete: SetNull)
+  teamId       Int?
+  team         Team?       @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  matchId      Int?
+  match        Match?      @relation(fields: [matchId], references: [id], onDelete: SetNull)
+  meta         Json?
+  updatedAt    DateTime    @updatedAt
+
+  @@unique([scope, key])
+  @@map("record_entries")
+}
+
+// NEW — achievement rules are data, not code, so thresholds stay editable.
+model AchievementDef {
+  id          Int      @id @default(autoincrement())
+  code        String   @unique
+  name        String
+  description String?
+  iconUrl     String?
+  tier        String?
+  gameId      Int?
+  game        Game?    @relation(fields: [gameId], references: [id], onDelete: SetNull)
+  rule        Json
+  isActive    Boolean  @default(true)
+  unlocks     PlayerAchievement[]
+
+  @@map("achievement_defs")
+}
+
+model PlayerAchievement {
+  id            Int            @id @default(autoincrement())
+  playerId      Int
+  player        Player         @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  achievementId Int
+  achievement   AchievementDef @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+  tournamentId  Int?
+  tournament    Tournament?    @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  matchId       Int?
+  match         Match?         @relation(fields: [matchId], references: [id], onDelete: SetNull)
+  value         Float?
+  unlockedAt    DateTime       @default(now())
+
+  @@unique([playerId, achievementId, tournamentId])
+  @@index([tournamentId])
+  @@map("player_achievements")
+}
+
+// NEW — serialises recalculation so two concurrent feed polls cannot
+// interleave and write stale standings.
+model RecalcJob {
+  id           Int          @id @default(autoincrement())
+  tournamentId Int
+  tournament   Tournament   @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  scope        String
+  status       RecalcStatus @default(QUEUED)
+  requestedById Int?
+  requestedBy  User?        @relation(fields: [requestedById], references: [id], onDelete: SetNull)
+  error        String?
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  createdAt    DateTime     @default(now())
+
+  @@index([tournamentId, status])
+  @@map("recalc_jobs")
 }
 
 model ApiConnector {
@@ -336,7 +651,14 @@ model ApiConnector {
   game       Game?     @relation(fields: [gameId], references: [id], onDelete: SetNull)
   name       String
   type       String    @default("push")
+  // DEPRECATED: plaintext key. Kept so the migration can read and hash existing
+  // keys, then null them out. Never returned by the API any more.
   apiKey     String    @unique
+  // NEW — hashed key + display prefix
+  apiKeyHash String?   @unique
+  apiKeyPrefix String?
+  // NEW — a connector may only import into these tournaments (empty = all)
+  tournamentIds Int[]  @default([])
   config     Json?
   isActive   Boolean   @default(true)
   imports    Int       @default(0)
@@ -346,12 +668,11 @@ model ApiConnector {
   @@map("api_connectors")
 }
 
-// A remote JSON endpoint that UETMS polls on a timer and auto-imports (pull mode).
 model FeedSource {
   id             Int         @id @default(autoincrement())
   name           String
   url            String
-  adapter        String      @default("auto") // auto | tochanparn | uetms
+  adapter        String      @default("auto")
   method         String      @default("GET")
   headers        Json?
   tournamentId   Int
@@ -363,8 +684,8 @@ model FeedSource {
   intervalSec    Int         @default(20)
   isActive       Boolean     @default(false)
   autoPublish    Boolean     @default(true)
-  importWhen     String      @default("finished") // finished | always
-  killField      String      @default("auto")     // auto | elim | knock | sum
+  importWhen     String      @default("finished")
+  killField      String      @default("auto")
   minTeams       Int         @default(2)
   lastHash       String?
   lastMatchKey   String?
@@ -376,6 +697,10 @@ model FeedSource {
   errors         Int         @default(0)
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
+  // NEW — stable match key for feeds that send no matchId, so live polling
+  // updates one match instead of creating a new one on every tick.
+  sessionKey     String?
+  sessionStartedAt DateTime?
   logs           FeedLog[]
 
   @@map("feed_sources")
@@ -385,7 +710,7 @@ model FeedLog {
   id        Int        @id @default(autoincrement())
   feedId    Int
   feed      FeedSource @relation(fields: [feedId], references: [id], onDelete: Cascade)
-  status    String     // imported | skipped | error
+  status    String
   message   String?
   matchKey  String?
   matchId   Int?
@@ -430,8 +755,12 @@ model AuditLog {
   before    Json?
   after     Json?
   createdAt DateTime @default(now())
+  // NEW — mandatory reason on manual overrides, plus request origin
+  reason    String?
+  ip        String?
 
   @@index([entity, entityId])
+  @@index([createdAt])
   @@map("audit_logs")
 }
 

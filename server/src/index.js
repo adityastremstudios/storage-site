@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import { config } from './config.js';
+import { config, assertProductionConfig, corsOrigins } from './config.js';
 import { prisma } from './lib/prisma.js';
 import { initSocket } from './lib/socket.js';
 import { cacheStatus } from './lib/cache.js';
@@ -28,13 +28,17 @@ import mediaRoutes, { uploadsDir } from './routes/media.js';
 import auditRoutes from './routes/audit.js';
 import connectorRoutes from './routes/connectors.js';
 import feedRoutes from './routes/feeds.js';
+import statsRoutes from './routes/stats.js';
+import matchOpsRoutes from './routes/matchOps.js';
 import { startFeedPoller } from './services/feedPoller.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
+// Refuse to boot in production with dev secrets or wildcard CORS.
+assertProductionConfig();
 app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: false, crossOriginEmbedderPolicy: false }));
-app.use(cors({ origin: config.corsOrigin }));
+app.use(cors({ origin: corsOrigins() }));
 app.use(express.json({ limit: '8mb' }));
 
 // --- API ---
@@ -62,6 +66,8 @@ app.use('/api/reports', reportRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/media', mediaRoutes);
 app.use('/api/audit', auditRoutes);
+app.use('/api/stats', statsRoutes);
+app.use('/api/match-ops', matchOpsRoutes);
 app.use('/api', notFound);
 
 // --- Static: uploads, overlays, public website, admin SPA ---

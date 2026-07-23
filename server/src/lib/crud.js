@@ -8,23 +8,42 @@ import { logAudit } from '../middleware/audit.js';
 const pass = (req, res, next) => next();
 const DATE_FIELDS = new Set(['scheduledAt', 'startedAt', 'endedAt', 'startDate', 'endDate', 'joinedAt', 'leftAt']);
 
+// f_* used to be written straight into Prisma's `where`, so any caller could
+// filter on arbitrary columns and — worse — send f_deletedAt to bypass the
+// soft-delete filter on every model. Filters are now allowlisted.
+const COMMON_FILTERS = new Set([
+  'id', 'tournamentId', 'roundId', 'matchId', 'teamId', 'playerId', 'gameId',
+  'organizationId', 'currentTeamId', 'status', 'isActive', 'isLocked',
+  'isArchived', 'isPublished', 'isDefault', 'role', 'scope', 'type', 'stage',
+  'groupName', 'mapId', 'winnerTeamId', 'matchNumber', 'order', 'source',
+]);
+const NEVER_FILTERABLE = new Set(['deletedAt', 'passwordHash', 'apiKey', 'apiKeyHash', 'tokenVersion']);
+
 export function crudRouter(modelName, opts = {}) {
   const {
     fields = [],
     searchFields = ['name'],
     include,
+    select,
     orderBy = { id: 'desc' },
     writeRole = 'ADMIN',
     readRole = null,
     softDelete = false,
-    transform = null, // async (data, req, isCreate) => data
-    extend = null,    // (router) => void — custom routes registered first
+    filterFields = null, // explicit allowlist; defaults to fields + COMMON_FILTERS
+    transform = null,    // async (data, req, isCreate) => data
+    extend = null,       // (router) => void — custom routes registered first
   } = opts;
   const model = prisma[modelName];
   const r = Router();
   r.use(authenticate);
   const canWrite = minRole(writeRole);
   const canRead = readRole ? minRole(readRole) : pass;
+  const shape = select ? { select } : { include };
+
+  const allowedFilters = new Set(
+    filterFields || [...fields, ...COMMON_FILTERS],
+  );
+  for (const blocked of NEVER_FILTERABLE) allowedFilters.delete(blocked);
 
   if (extend) extend(r, { model, canWrite, canRead });
 
@@ -50,17 +69,22 @@ export function crudRouter(modelName, opts = {}) {
       if (req.query.q && searchFields.length) {
         where.OR = searchFields.map((f) => ({ [f]: { contains: req.query.q, mode: 'insensitive' } }));
       }
+      const rejected = [];
       for (const [k, raw] of Object.entries(req.query)) {
         if (!k.startsWith('f_')) continue;
         const key = k.slice(2);
+        if (!allowedFilters.has(key)) { rejected.push(key); continue; }
         let v = raw;
         if (v === 'true') v = true;
         else if (v === 'false') v = false;
         else if (v !== '' && !Number.isNaN(Number(v))) v = Number(v);
         where[key] = v;
       }
+      if (rejected.length) {
+        return res.status(400).json({ error: `Cannot filter on: ${rejected.join(', ')}` });
+      }
       const [items, total] = await Promise.all([
-        model.findMany({ where, include, orderBy, skip: (page - 1) * limit, take: limit }),
+        model.findMany({ where, ...shape, orderBy, skip: (page - 1) * limit, take: limit }),
         model.count({ where }),
       ]);
       res.json({ items, total, page, limit });
@@ -69,7 +93,7 @@ export function crudRouter(modelName, opts = {}) {
 
   r.get('/:id(\\d+)', canRead, async (req, res, next) => {
     try {
-      const item = await model.findUnique({ where: { id: Number(req.params.id) }, include });
+      const item = await model.findUnique({ where: { id: Number(req.params.id) }, ...shape });
       if (!item) return res.status(404).json({ error: 'Not found' });
       res.json(item);
     } catch (e) { next(e); }
@@ -79,7 +103,7 @@ export function crudRouter(modelName, opts = {}) {
     try {
       let data = pick(req.body);
       if (transform) data = await transform(data, req, true);
-      const created = await model.create({ data, include });
+      const created = await model.create({ data, ...shape });
       await logAudit(req, modelName, created.id, 'create', null, created);
       res.status(201).json(created);
     } catch (e) { next(e); }
@@ -92,7 +116,7 @@ export function crudRouter(modelName, opts = {}) {
       if (!before) return res.status(404).json({ error: 'Not found' });
       let data = pick(req.body);
       if (transform) data = await transform(data, req, false);
-      const updated = await model.update({ where: { id }, data, include });
+      const updated = await model.update({ where: { id }, data, ...shape });
       await logAudit(req, modelName, id, 'update', before, updated);
       res.json(updated);
     } catch (e) { next(e); }
@@ -106,10 +130,12 @@ export function crudRouter(modelName, opts = {}) {
       if (softDelete) {
         const updated = await model.update({ where: { id }, data: { deletedAt: new Date() } });
         await logAudit(req, modelName, id, 'soft-delete', before, updated);
+        if (opts.afterWrite) await opts.afterWrite('delete', before, req);
         return res.json({ ok: true, softDeleted: true });
       }
       await model.delete({ where: { id } });
       await logAudit(req, modelName, id, 'delete', before, null);
+      if (opts.afterWrite) await opts.afterWrite('delete', before, req);
       res.json({ ok: true });
     } catch (e) { next(e); }
   });
@@ -120,6 +146,7 @@ export function crudRouter(modelName, opts = {}) {
         const id = Number(req.params.id);
         const updated = await model.update({ where: { id }, data: { deletedAt: null } });
         await logAudit(req, modelName, id, 'restore', null, updated);
+        if (opts.afterWrite) await opts.afterWrite('restore', updated, req);
         res.json(updated);
       } catch (e) { next(e); }
     });
