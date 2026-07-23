@@ -31,6 +31,7 @@ export function assertProductionConfig() {
   }
 
   const problems = [];
+  const warnings = [];
   if (!process.env.JWT_SECRET || config.jwtSecret === DEV_ACCESS_SECRET) {
     problems.push('JWT_SECRET is missing or still the built-in dev value');
   }
@@ -43,8 +44,11 @@ export function assertProductionConfig() {
   if (config.jwtSecret.length < 32) {
     problems.push('JWT_SECRET must be at least 32 characters');
   }
+  // CORS_ORIGIN='*' is a warning, not a boot failure: this API authenticates
+  // with Bearer tokens rather than cookies, so a permissive origin does not
+  // hand an attacker anything. Forged JWTs would, which is why those are fatal.
   if (config.corsOrigin === '*') {
-    problems.push('CORS_ORIGIN is "*" — set it to your real admin/site origins');
+    warnings.push('CORS_ORIGIN is "*" — set it to your real admin/site origins');
   }
   if (config.admin.password === 'Admin@123') {
     problems.push('ADMIN_PASSWORD is still the documented default');
@@ -53,8 +57,17 @@ export function assertProductionConfig() {
     problems.push('DATABASE_URL is not set');
   }
 
+  if (warnings.length) {
+    console.warn('\n[config] warnings:\n' + warnings.map((p) => `  - ${p}`).join('\n') + '\n');
+  }
+
   if (problems.length) {
-    console.error('\n[config] refusing to start in production:\n' + problems.map((p) => `  - ${p}`).join('\n') + '\n');
+    console.error(
+      '\n[config] refusing to start in production:\n'
+      + problems.map((p) => `  - ${p}`).join('\n')
+      + '\n\nSet these in your host\'s environment settings, then redeploy.'
+      + '\nGenerate a secret with:  node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'hex\'))"\n',
+    );
     process.exit(1);
   }
 }

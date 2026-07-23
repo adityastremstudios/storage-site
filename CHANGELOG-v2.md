@@ -137,3 +137,62 @@ with actor, before/after and a mandatory reason on manual overrides.
   map veto, rounds-won and ACS/ADR/KAST still need building.
 - No DB-level unique on `[tournamentId, roundId, matchNumber]`; duplicate
   detection is done in the import pipeline so it reports rather than crashes.
+
+---
+
+## Deploy notes (Render / Docker)
+
+### `prisma db push` refuses with "There might be data loss"
+
+The v2 schema adds three unique constraints. Prisma cannot verify they are safe
+without reading your data, so it stops. All three are safe:
+
+| Constraint | Why it cannot conflict |
+|---|---|
+| `api_connectors.apiKeyHash` | Brand-new column, every existing row is NULL, and Postgres treats NULLs as distinct |
+| `matches [tournamentId, externalMatchId]` | `externalMatchId` was already globally unique, so it is unique within any subset by definition |
+| `players.externalId` | Brand-new column, all NULL |
+
+Verified against the original schema: **0 dropped models, 0 dropped fields,
+0 new required columns.**
+
+Run `server/scripts/preflight.sql` if you want to confirm on your own data —
+all three checks must return `conflicts = 0`.
+
+The included `docker-entrypoint.sh` passes `--accept-data-loss` for this reason.
+
+**After this deploy succeeds, switch to real migrations.** `--accept-data-loss`
+is permanent in the entrypoint and will silently accept genuinely destructive
+changes later:
+
+```bash
+npx prisma migrate dev --name uetms-v2      # locally, generates SQL
+git add prisma/migrations && git commit
+# then change the entrypoint line to:
+npx prisma migrate deploy
+```
+
+### Required environment variables
+
+`Dockerfile` sets `NODE_ENV=production`, so `assertProductionConfig()` runs and
+the server refuses to boot without these:
+
+| Variable | Requirement |
+|---|---|
+| `DATABASE_URL` | Must be set |
+| `JWT_SECRET` | 32+ chars, not the dev default |
+| `JWT_REFRESH_SECRET` | Must differ from `JWT_SECRET` |
+| `ADMIN_PASSWORD` | Not `Admin@123` |
+
+Generate each secret separately:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+```
+
+`CORS_ORIGIN` is a warning rather than a failure: this API authenticates with
+Bearer tokens, not cookies, so a permissive origin does not by itself hand an
+attacker anything. Set it to your real origin anyway.
+
+Without these the boot log prints exactly which variables are wrong and exits 1.
+That is the guard working, not a crash.
